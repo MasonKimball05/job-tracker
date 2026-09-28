@@ -1,0 +1,194 @@
+@page "/"
+@inject IDbContextFactory<JobDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>Board · Job Tracker</PageTitle>
+
+<div class="page-head">
+    <div class="grow">
+        <h1>Your search</h1>
+        <div class="muted">@Today.ToString("dddd, MMMM d")</div>
+    </div>
+    <a class="btn primary" href="new">+ Add job</a>
+</div>
+
+@if (view is null)
+{
+    <p class="muted">Loading…</p>
+}
+else if (view.Total == 0)
+{
+    <div class="panel empty">
+        <h2>No applications yet</h2>
+        <p>Paste a job posting and Claude will fill in the details for you.</p>
+        <a class="btn primary" href="new">Add your first job</a>
+    </div>
+}
+else
+{
+    <div class="stats" style="margin-bottom:18px">
+        <div class="stat"><b>@view.Total</b><span class="muted small">tracked</span></div>
+        <div class="stat"><b>@view.Applied</b><span class="muted small">applied</span></div>
+        <div class="stat"><b>@view.Interviewing</b><span class="muted small">interviewing</span></div>
+        <div class="stat">
+            <b>@(view.ResponseRate is { } r ? $"{r:P0}" : "–")</b>
+            <span class="muted small">response rate</span>
+        </div>
+    </div>
+
+    @if (view.FollowUpsDue.Count > 0)
+    {
+        <div class="notice" style="margin-bottom:18px">
+            <strong>Follow-ups due:</strong>
+            @foreach (var (app, i) in view.FollowUpsDue.Select((a, i) => (a, i)))
+            {
+                @(i > 0 ? ", " : " ")<a href="applications/@app.Id">@app.Company</a>
+            }
+        </div>
+    }
+
+    <div class="filters" role="search">
+        <input class="filter-search" type="search" placeholder="Search company, role, notes"
+               aria-label="Search" @bind="Search" @bind:event="oninput" @bind:after="Apply" />
+
+        <select aria-label="Work mode" @bind="Mode" @bind:after="Apply">
+            <option value="">Any work mode</option>
+            <option value="Onsite">In person</option>
+            <option value="Hybrid">Hybrid</option>
+            <option value="Remote">Remote</option>
+            <option value="@BoardFilter.UnknownMode">Not specified</option>
+        </select>
+
+        <select aria-label="Location" @bind="Loc" @bind:after="Apply" disabled="@(view.Locations.Count == 0)">
+            <option value="">Any location</option>
+            @foreach (var l in view.Locations)
+            {
+                <option value="@l">@l</option>
+            }
+        </select>
+
+        <select aria-label="Minimum match" @bind="Min" @bind:after="Apply">
+            <option value="">Any match</option>
+            <option value="50">50%+ match</option>
+            <option value="75">75%+ match</option>
+            <option value="90">90%+ match</option>
+        </select>
+
+        <label class="sort">
+            Sort
+            <select @bind="SortBy" @bind:after="Apply">
+                <option value="@BoardSort.Recent">Recently updated</option>
+                <option value="@BoardSort.BestMatch">Best match</option>
+                <option value="@BoardSort.FollowUp">Follow-up date</option>
+                <option value="@BoardSort.Company">Company A–Z</option>
+            </select>
+        </label>
+
+        @if (Filter.IsActive)
+        {
+            <span class="muted small">Showing @view.Shown of @view.Total</span>
+            <button class="link" @onclick="Clear">Clear filters</button>
+        }
+    </div>
+
+    @if (Filter.IsActive && view.Shown == 0)
+    {
+        <div class="panel empty">
+            <p>No jobs match these filters.</p>
+            <button @onclick="Clear">Clear filters</button>
+        </div>
+    }
+    else
+    {
+        <div class="board">
+            @foreach (var status in BoardView.Pipeline)
+            {
+                var apps = view.Columns[status];
+                <section class="column" aria-label="@status">
+                    <h2><span>@status</span><span>@apps.Count</span></h2>
+                    @foreach (var app in apps)
+                    {
+                        <JobCard App="app" Today="Today" />
+                    }
+                </section>
+            }
+        </div>
+
+        @if (view.Closed.Count > 0)
+        {
+            <details class="closed panel">
+                <summary>Closed (@view.Closed.Count)</summary>
+                <table>
+                    @foreach (var app in view.Closed)
+                    {
+                        <tr>
+                            <td><a href="applications/@app.Id">@app.Role</a></td>
+                            <td class="muted">@app.Company</td>
+                            <td><span class="pill">@app.Status</span></td>
+                            <td class="muted small">@app.UpdatedAt.ToLocalTime().ToString("MMM d")</td>
+                        </tr>
+                    }
+                </table>
+            </details>
+        }
+    }
+}
+
+@code {
+    // Filters live in the URL (?mode=Remote&sort=BestMatch), so a refresh or
+    // bookmark keeps them. Blazor fills these properties from the query string.
+    [SupplyParameterFromQuery(Name = "q")] public string? Search { get; set; }
+    [SupplyParameterFromQuery(Name = "mode")] public string? Mode { get; set; }
+    [SupplyParameterFromQuery(Name = "loc")] public string? Loc { get; set; }
+    [SupplyParameterFromQuery(Name = "min")] public string? Min { get; set; }
+    [SupplyParameterFromQuery(Name = "sort")] public string? SortBy { get; set; }
+
+    List<JobApplication>? apps;
+    BoardView? view;
+    static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
+
+    BoardFilter Filter => new(
+        Search: string.IsNullOrWhiteSpace(Search) ? null : Search,
+        WorkMode: string.IsNullOrEmpty(Mode) ? null : Mode,
+        Location: string.IsNullOrEmpty(Loc) ? null : Loc,
+        MinMatch: int.TryParse(Min, out var m) ? m : null,
+        // TryParse rejects junk like ?sort=xyz and falls back to Recent.
+        Sort: Enum.TryParse<BoardSort>(SortBy, ignoreCase: true, out var s) ? s : BoardSort.Recent);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // AsNoTracking: read-only query, so EF skips change tracking.
+        apps = await db.Applications.AsNoTracking().ToListAsync();
+    }
+
+    // Runs on first load and whenever the query string changes.
+    protected override void OnParametersSet() => Rebuild();
+
+    void Rebuild()
+    {
+        if (apps is not null) view = BoardView.Build(apps, Today, Filter);
+    }
+
+    void Apply()
+    {
+        Rebuild();
+        // Write the filters back to the URL without reloading the page.
+        // Empty values are removed from the query string.
+        var f = Filter;
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+        {
+            ["q"] = f.Search,
+            ["mode"] = f.WorkMode,
+            ["loc"] = f.Location,
+            ["min"] = f.MinMatch,
+            ["sort"] = f.Sort == BoardSort.Recent ? null : f.Sort.ToString(),
+        }), replace: true);
+    }
+
+    void Clear()
+    {
+        Search = Mode = Loc = Min = null;
+        Apply();
+    }
+}

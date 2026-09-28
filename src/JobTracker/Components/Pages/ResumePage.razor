@@ -1,0 +1,124 @@
+@page "/resume"
+@inject IDbContextFactory<JobDbContext> DbFactory
+
+<PageTitle>Résumé · Job Tracker</PageTitle>
+
+<div class="page-head">
+    <div class="grow">
+        <h1>Your résumé</h1>
+        <div class="muted">Claude compares postings against this and writes cover letters from it. It stays on this computer except when sent to Claude for those features.</div>
+    </div>
+</div>
+
+@if (resume is null)
+{
+    <p class="muted">Loading…</p>
+}
+else
+{
+    <div class="detail">
+        <section class="panel stack">
+            <h2>Upload a PDF</h2>
+            <p class="muted small" style="margin:0">Best option: Claude reads the PDF directly, layout and all.</p>
+            <InputFile OnChange="Upload" accept="application/pdf" />
+            @if (resume.Pdf is { Length: > 0 })
+            {
+                <div class="row">
+                    <span class="pill">📄 @resume.PdfFileName (@(resume.Pdf.Length / 1024) KB)</span>
+                    <button class="link" @onclick="RemovePdf">Remove</button>
+                </div>
+            }
+            @if (message is not null)
+            {
+                <div class="notice @(messageOk ? "ok" : "bad")">@message</div>
+            }
+        </section>
+
+        <section class="panel stack">
+            <h2>…or paste it as text</h2>
+            <textarea class="posting" @bind="resume.Text" placeholder="Paste your résumé here."></textarea>
+            <div class="row">
+                <button class="primary" @onclick="SaveText">Save text</button>
+                @if (resume.Pdf is { Length: > 0 })
+                {
+                    <span class="muted small">When a PDF is uploaded, it's used instead of this text.</span>
+                }
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    const long MaxPdfBytes = 5 * 1024 * 1024;
+
+    Resume? resume;
+    string? message;
+    bool messageOk;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        resume = await db.Resumes.AsNoTracking().FirstOrDefaultAsync() ?? new Resume();
+    }
+
+    async Task Upload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file.ContentType != "application/pdf" && !file.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            Show("Please choose a PDF file.", ok: false);
+            return;
+        }
+        if (file.Size > MaxPdfBytes)
+        {
+            Show("That PDF is over 5 MB. Export a smaller one.", ok: false);
+            return;
+        }
+
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(MaxPdfBytes).CopyToAsync(ms);
+        var bytes = ms.ToArray();
+
+        // Check the file really is a PDF (every PDF starts with "%PDF-"), not just named like one.
+        if (bytes.Length < 5 || !bytes.AsSpan(0, 5).SequenceEqual("%PDF-"u8))
+        {
+            Show("That file isn't a valid PDF.", ok: false);
+            return;
+        }
+
+        resume!.Pdf = bytes;
+        resume.PdfFileName = Path.GetFileName(file.Name);
+        await Persist();
+        Show("Résumé PDF saved.", ok: true);
+    }
+
+    async Task RemovePdf()
+    {
+        resume!.Pdf = null;
+        resume.PdfFileName = null;
+        await Persist();
+        Show("PDF removed.", ok: true);
+    }
+
+    async Task SaveText()
+    {
+        await Persist();
+        Show("Résumé text saved.", ok: true);
+    }
+
+    async Task Persist()
+    {
+        resume!.UpdatedAt = DateTime.UtcNow;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Id 0 means it's never been saved: insert; otherwise update the single row.
+        if (resume.Id == 0) db.Resumes.Add(resume);
+        else db.Resumes.Update(resume);
+        await db.SaveChangesAsync();
+    }
+
+    void Show(string text, bool ok)
+    {
+        message = text;
+        messageOk = ok;
+    }
+}

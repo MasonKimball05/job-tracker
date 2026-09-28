@@ -1,0 +1,108 @@
+@page "/new"
+@inject IDbContextFactory<JobDbContext> DbFactory
+@inject IJobAi Ai
+@inject NavigationManager Nav
+
+<PageTitle>Add job · Job Tracker</PageTitle>
+
+<div class="page-head">
+    <div class="grow">
+        <h1>Add a job</h1>
+        <div class="muted">Paste the posting and let Claude fill in the details, or enter them yourself.</div>
+    </div>
+</div>
+
+<div class="detail">
+    <section class="panel stack">
+        <h2>1. Job posting</h2>
+        <div>
+            <label for="posting">Posting text</label>
+            <textarea id="posting" class="posting" @bind="postingText" @bind:event="oninput"
+                      placeholder="Copy the whole job description from the listing and paste it here."></textarea>
+            <div class="muted small">@postingText.Length.ToString("N0") / @MaxPosting.ToString("N0") characters</div>
+        </div>
+        <div class="row">
+            <button class="primary" @onclick="Extract" disabled="@(extracting || string.IsNullOrWhiteSpace(postingText) || !Ai.IsConfigured)">
+                @(extracting ? "Reading posting…" : "✨ Fill in with Claude")
+            </button>
+            @if (!Ai.IsConfigured)
+            {
+                <span class="muted small">Add an API key to enable (see README).</span>
+            }
+        </div>
+        @if (error is not null)
+        {
+            <div class="notice bad">@error</div>
+        }
+        @if (summary is not null)
+        {
+            <div class="notice ok"><strong>Summary:</strong> @summary</div>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>2. Details</h2>
+        <EditForm Model="job" OnValidSubmit="Save" FormName="new-job">
+            <DataAnnotationsValidator />
+            <JobFields Job="job" />
+            <div class="row" style="margin-top:16px">
+                <button type="submit" class="primary" disabled="@saving">Save job</button>
+                <a class="btn" href="">Cancel</a>
+            </div>
+        </EditForm>
+    </section>
+</div>
+
+@code {
+    const int MaxPosting = 50_000;
+
+    JobApplication job = new();
+    string postingText = "";
+    string? summary;
+    string? error;
+    bool extracting;
+    bool saving;
+
+    async Task Extract()
+    {
+        error = null;
+        if (postingText.Length > MaxPosting)
+        {
+            error = $"That's longer than {MaxPosting:N0} characters. Paste just the job description.";
+            return;
+        }
+        extracting = true;
+        try
+        {
+            var info = await Ai.ExtractPostingAsync(postingText);
+            job.Company = info.Company;
+            job.Role = info.Role;
+            job.Location = info.Location;
+            job.WorkMode = info.WorkMode == "Unknown" ? null : info.WorkMode;
+            job.Salary = info.Salary;
+            job.Requirements = info.Requirements;
+            job.NiceToHaves = info.NiceToHaves;
+            summary = info.Summary;
+        }
+        catch (AiException e)
+        {
+            error = e.Message;
+        }
+        finally
+        {
+            extracting = false;
+        }
+    }
+
+    async Task Save()
+    {
+        saving = true;
+        job.PostingText = string.IsNullOrWhiteSpace(postingText) ? null : postingText.Trim();
+        job.StampAppliedDate(DateOnly.FromDateTime(DateTime.Now));
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Applications.Add(job);
+        await db.SaveChangesAsync();
+        Nav.NavigateTo($"applications/{job.Id}");
+    }
+}

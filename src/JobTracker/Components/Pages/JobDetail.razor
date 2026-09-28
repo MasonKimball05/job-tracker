@@ -1,0 +1,316 @@
+@page "/applications/{Id:int}"
+@implements IDisposable
+@inject IDbContextFactory<JobDbContext> DbFactory
+@inject IJobAi Ai
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>@(job is null ? "Job" : $"{job.Role} · {job.Company}") · Job Tracker</PageTitle>
+
+@if (notFound)
+{
+    <div class="panel empty">
+        <h2>That application doesn't exist.</h2>
+        <a href="">Back to the board</a>
+    </div>
+}
+else if (job is null)
+{
+    <p class="muted">Loading…</p>
+}
+else
+{
+    <div class="page-head">
+        <div class="grow">
+            <div class="muted small"><a href="">Board</a> / @job.Status</div>
+            <h1>@job.Role</h1>
+            <div class="muted">
+                @job.Company@(job.Location is null ? "" : $" · {job.Location}")@(job.WorkMode is null ? "" : $" · {job.WorkMode}")
+                @if (!string.IsNullOrWhiteSpace(job.PostingUrl))
+                {
+                    <span> · <a href="@job.PostingUrl" target="_blank" rel="noopener noreferrer">View posting ↗</a></span>
+                }
+            </div>
+        </div>
+        @if (job.MatchScore is { } s)
+        {
+            <ScorePill Score="s" />
+        }
+    </div>
+
+    <div class="detail">
+        <div class="stack">
+            <section class="panel">
+                <EditForm Model="job" OnValidSubmit="Save" FormName="edit-job">
+                    <DataAnnotationsValidator />
+                    <JobFields Job="job" />
+                    <div class="row" style="margin-top:16px">
+                        <button type="submit" class="primary">Save changes</button>
+                        @if (savedAt is not null)
+                        {
+                            <span class="muted small">Saved @savedAt.Value.ToString("h:mm tt")</span>
+                        }
+                        <span class="spacer" style="flex:1"></span>
+                        @if (confirmDelete)
+                        {
+                            <span class="small">Delete this job and its contacts?</span>
+                            <button type="button" class="danger" @onclick="Delete">Yes, delete</button>
+                            <button type="button" @onclick="() => confirmDelete = false">Keep</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="danger" @onclick="() => confirmDelete = true">Delete</button>
+                        }
+                    </div>
+                </EditForm>
+            </section>
+
+            <section class="panel">
+                <h2>Contacts</h2>
+                @if (job.Contacts.Count == 0)
+                {
+                    <p class="muted small">Recruiters, interviewers, referrals…</p>
+                }
+                @foreach (var c in job.Contacts)
+                {
+                    <div class="contact">
+                        <div>
+                            <strong>@c.Name</strong>@(c.Title is null ? "" : $", {c.Title}")
+                            @if (c.Email is not null)
+                            {
+                                <div class="small"><a href="mailto:@c.Email">@c.Email</a></div>
+                            }
+                        </div>
+                        <button class="link" @onclick="() => RemoveContact(c)">Remove</button>
+                    </div>
+                }
+                <EditForm Model="newContact" OnValidSubmit="AddContact" FormName="add-contact">
+                    <DataAnnotationsValidator />
+                    <div class="grid-3" style="margin-top:12px">
+                        <InputText @bind-Value="newContact.Name" placeholder="Name" aria-label="Contact name" />
+                        <InputText @bind-Value="newContact.Title" placeholder="Title" aria-label="Contact title" />
+                        <InputText @bind-Value="newContact.Email" placeholder="Email" aria-label="Contact email" />
+                    </div>
+                    <ValidationSummary />
+                    <button type="submit" style="margin-top:8px">Add contact</button>
+                </EditForm>
+            </section>
+
+            @if (!string.IsNullOrWhiteSpace(job.PostingText))
+            {
+                <details class="panel">
+                    <summary><strong>Original posting</strong></summary>
+                    <pre style="white-space:pre-wrap; font:inherit; margin:12px 0 0">@job.PostingText</pre>
+                </details>
+            }
+        </div>
+
+        <div class="stack">
+            <section class="panel stack">
+                <div class="row">
+                    <h2 style="margin:0; flex:1">Résumé match</h2>
+                    <button @onclick="Analyze" disabled="@(busy || !Ai.IsConfigured)">
+                        @(analyzing ? "Analyzing…" : job.MatchScore is null ? "✨ Analyze match" : "Re-analyze")
+                    </button>
+                </div>
+                @if (matchError is not null)
+                {
+                    <div class="notice bad">@matchError</div>
+                }
+                @if (job.MatchScore is { } score)
+                {
+                    <div class="row">
+                        <span class="score">@score%</span>
+                        <span>@job.MatchSummary</span>
+                    </div>
+                    @if (job.MatchStrengths.Count > 0)
+                    {
+                        <div><strong class="small">Strengths</strong><ul class="clean">@foreach (var x in job.MatchStrengths) { <li>@x</li> }</ul></div>
+                    }
+                    @if (job.MatchGaps.Count > 0)
+                    {
+                        <div><strong class="small">Gaps</strong><ul class="clean">@foreach (var x in job.MatchGaps) { <li>@x</li> }</ul></div>
+                    }
+                    @if (suggestions.Count > 0)
+                    {
+                        <div><strong class="small">Suggestions</strong><ul class="clean">@foreach (var x in suggestions) { <li>@x</li> }</ul></div>
+                    }
+                }
+                else if (!analyzing)
+                {
+                    <p class="muted small" style="margin:0">Compares your <a href="resume">résumé</a> against this posting's requirements.</p>
+                }
+            </section>
+
+            <section class="panel stack">
+                <h2 style="margin:0">Cover letter</h2>
+                <div>
+                    <label for="guidance">Guidance <span class="muted">(optional)</span></label>
+                    <input id="guidance" @bind="guidance" placeholder="e.g. mention my Parliament project; keep it brief" />
+                </div>
+                <div class="row">
+                    <button class="primary" @onclick="Draft" disabled="@(busy || !Ai.IsConfigured)">
+                        @(drafting ? "Writing…" : string.IsNullOrWhiteSpace(job.CoverLetter) ? "✨ Draft with Claude" : "Redraft")
+                    </button>
+                    @if (drafting)
+                    {
+                        <button @onclick="StopDraft">Stop</button>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(job.CoverLetter) && !drafting)
+                    {
+                        <button @onclick="SaveLetter">Save letter</button>
+                        <button @onclick="Copy">@(copied ? "Copied ✓" : "Copy")</button>
+                    }
+                </div>
+                @if (letterError is not null)
+                {
+                    <div class="notice bad">@letterError</div>
+                }
+                <textarea class="letter" @bind="job.CoverLetter" readonly="@drafting"
+                          placeholder="Your draft appears here. Edit it freely before using it."></textarea>
+                <div class="muted small">Always read and edit a draft before sending: it's a starting point, not a final letter.</div>
+            </section>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    JobApplication? job;
+    bool notFound;
+    DateTime? savedAt;
+    bool confirmDelete;
+    Contact newContact = new();
+
+    bool analyzing, drafting, copied;
+    bool busy => analyzing || drafting;
+    string? matchError, letterError, guidance;
+    List<string> suggestions = [];
+    CancellationTokenSource? draftCts;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        job = await db.Applications.Include(a => a.Contacts).AsNoTracking().FirstOrDefaultAsync(a => a.Id == Id);
+        notFound = job is null;
+    }
+
+    async Task Save()
+    {
+        job!.StampAppliedDate(DateOnly.FromDateTime(DateTime.Now));
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Update() attaches the detached object and marks its fields modified.
+        // Contacts are saved separately, so detach them from this update.
+        var contacts = job.Contacts;
+        job.Contacts = [];
+        db.Applications.Update(job);
+        await db.SaveChangesAsync();
+        job.Contacts = contacts;
+        savedAt = DateTime.Now;
+    }
+
+    async Task Delete()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.Applications.Where(a => a.Id == Id).ExecuteDeleteAsync();
+        Nav.NavigateTo("");
+    }
+
+    async Task AddContact()
+    {
+        newContact.JobApplicationId = Id;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Contacts.Add(newContact);
+        await db.SaveChangesAsync();
+        job!.Contacts.Add(newContact);
+        newContact = new();
+    }
+
+    async Task RemoveContact(Contact c)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.Contacts.Where(x => x.Id == c.Id && x.JobApplicationId == Id).ExecuteDeleteAsync();
+        job!.Contacts.Remove(c);
+    }
+
+    async Task<Resume?> LoadResume()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        return await db.Resumes.AsNoTracking().FirstOrDefaultAsync();
+    }
+
+    async Task Analyze()
+    {
+        matchError = null;
+        analyzing = true;
+        try
+        {
+            var resume = await LoadResume() ?? new Resume();
+            var m = await Ai.AnalyzeMatchAsync(resume, job!);
+            job!.MatchScore = m.Score;
+            job.MatchSummary = m.Verdict;
+            job.MatchStrengths = m.Strengths;
+            job.MatchGaps = m.Gaps;
+            suggestions = m.Suggestions;
+            await Save();
+        }
+        catch (AiException e)
+        {
+            matchError = e.Message;
+        }
+        finally
+        {
+            analyzing = false;
+        }
+    }
+
+    async Task Draft()
+    {
+        letterError = null;
+        copied = false;
+        drafting = true;
+        draftCts = new CancellationTokenSource();
+        var previous = job!.CoverLetter;
+        job.CoverLetter = "";
+        try
+        {
+            var resume = await LoadResume() ?? new Resume();
+            // Each chunk re-renders the textarea, so the letter appears as it's written.
+            await foreach (var chunk in Ai.DraftCoverLetterAsync(resume, job, guidance, draftCts.Token))
+            {
+                job.CoverLetter += chunk;
+                StateHasChanged();
+            }
+            await Save();
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped by the user: keep whatever was written.
+        }
+        catch (AiException e)
+        {
+            letterError = e.Message;
+            if (string.IsNullOrWhiteSpace(job.CoverLetter)) job.CoverLetter = previous;
+        }
+        finally
+        {
+            drafting = false;
+            draftCts?.Dispose();
+            draftCts = null;
+        }
+    }
+
+    void StopDraft() => draftCts?.Cancel();
+
+    async Task SaveLetter() => await Save();
+
+    async Task Copy()
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", job!.CoverLetter ?? "");
+        copied = true;
+    }
+
+    // Leaving the page cancels an in-progress draft instead of letting it run on.
+    public void Dispose() => draftCts?.Cancel();
+}

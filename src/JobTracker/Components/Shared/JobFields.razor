@@ -1,0 +1,96 @@
+@* The editable fields of a JobApplication. Must sit inside an <EditForm>. *@
+
+<div class="stack">
+    <div class="grid-2">
+        <div>
+            <label for="company">Company</label>
+            <InputText id="company" @bind-Value="Job.Company" />
+            <ValidationMessage For="() => Job.Company" />
+        </div>
+        <div>
+            <label for="role">Role</label>
+            <InputText id="role" @bind-Value="Job.Role" />
+            <ValidationMessage For="() => Job.Role" />
+        </div>
+    </div>
+    <div class="grid-3">
+        <div>
+            <label for="location">Location</label>
+            <InputText id="location" @bind-Value="Job.Location" />
+        </div>
+        <div>
+            <label for="mode">Work mode</label>
+            <InputSelect id="mode" @bind-Value="Job.WorkMode">
+                <option value="">–</option>
+                @foreach (var m in WorkModes)
+                {
+                    <option value="@m">@m</option>
+                }
+            </InputSelect>
+        </div>
+        <div>
+            <label for="salary">Salary</label>
+            <InputText id="salary" @bind-Value="Job.Salary" />
+        </div>
+    </div>
+    <div>
+        <label for="url">Posting URL</label>
+        <InputText id="url" @bind-Value="Job.PostingUrl" placeholder="https://…" />
+        <ValidationMessage For="() => Job.PostingUrl" />
+    </div>
+    <div class="grid-3">
+        <div>
+            <label for="status">Status</label>
+            <InputSelect id="status" @bind-Value="Job.Status">
+                @foreach (var s in Enum.GetValues<ApplicationStatus>())
+                {
+                    <option value="@s">@s</option>
+                }
+            </InputSelect>
+        </div>
+        <div>
+            <label for="applied">Applied on</label>
+            <InputDate id="applied" @bind-Value="Job.AppliedOn" />
+        </div>
+        <div>
+            <label for="followup">Follow up on</label>
+            <InputDate id="followup" @bind-Value="Job.FollowUpOn" />
+        </div>
+    </div>
+    <div class="grid-2">
+        <div>
+            <label for="reqs">Requirements <span class="muted">(one per line)</span></label>
+            <InputTextArea id="reqs" @bind-Value="RequirementsText" rows="6" />
+        </div>
+        <div>
+            <label for="nice">Nice to have <span class="muted">(one per line)</span></label>
+            <InputTextArea id="nice" @bind-Value="NiceText" rows="6" />
+        </div>
+    </div>
+    <div>
+        <label for="notes">Notes</label>
+        <InputTextArea id="notes" @bind-Value="Job.Notes" rows="3" />
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public JobApplication Job { get; set; } = default!;
+
+    static readonly string[] WorkModes = ["Onsite", "Hybrid", "Remote"];
+
+    // Lists are edited as one-item-per-line text.
+    string RequirementsText
+    {
+        get => string.Join('\n', Job.Requirements);
+        set => Job.Requirements = Lines(value);
+    }
+
+    string NiceText
+    {
+        get => string.Join('\n', Job.NiceToHaves);
+        set => Job.NiceToHaves = Lines(value);
+    }
+
+    static List<string> Lines(string? text) =>
+        (text ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+}

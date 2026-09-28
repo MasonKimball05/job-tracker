@@ -1,0 +1,27 @@
+@inherits LayoutComponentBase
+@inject JobTracker.Services.IJobAi Ai
+
+<div class="shell">
+    <nav class="topnav">
+        <span class="brand">Job Tracker</span>
+        <NavLink href="" Match="NavLinkMatch.All">Board</NavLink>
+        <NavLink href="new">Add job</NavLink>
+        <NavLink href="resume">Résumé</NavLink>
+        <span class="spacer"></span>
+        @if (!Ai.IsConfigured)
+        {
+            <span class="pill" title="Set Anthropic:ApiKey with dotnet user-secrets, then restart">AI off: no API key</span>
+        }
+    </nav>
+    <main class="page">
+        <ErrorBoundary>
+            @Body
+        </ErrorBoundary>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

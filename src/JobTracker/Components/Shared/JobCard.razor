@@ -1,0 +1,27 @@
+<a class="card" href="applications/@App.Id">
+    <div class="role">@App.Role</div>
+    <div class="muted small">@App.Company@(App.Location is null ? "" : $" · {App.Location}")</div>
+    <div class="meta">
+        @if (App.FollowUpDue(Today))
+        {
+            <span class="pill due">Follow up</span>
+        }
+        else if (App.FollowUpOn is { } f && App.IsOpen)
+        {
+            <span class="pill">Follow up @f.ToString("MMM d")</span>
+        }
+        @if (App.MatchScore is { } s)
+        {
+            <ScorePill Score="s" />
+        }
+        @if (App.AppliedOn is { } d)
+        {
+            <span class="pill">Applied @d.ToString("MMM d")</span>
+        }
+    </div>
+</a>
+
+@code {
+    [Parameter, EditorRequired] public JobApplication App { get; set; } = default!;
+    [Parameter] public DateOnly Today { get; set; }
+}

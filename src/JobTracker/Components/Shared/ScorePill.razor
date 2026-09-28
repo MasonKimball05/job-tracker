@@ -1,0 +1,12 @@
+<span class="pill @Css" title="Résumé match score">@Score% match</span>
+
+@code {
+    [Parameter] public int Score { get; set; }
+
+    string Css => Score switch
+    {
+        >= 75 => "score-hi",
+        >= 50 => "score-mid",
+        _ => "score-lo",
+    };
+}
