@@ -7,6 +7,8 @@ public class JobDbContext(DbContextOptions<JobDbContext> options) : DbContext(op
     public DbSet<JobApplication> Applications => Set<JobApplication>();
     public DbSet<Contact> Contacts => Set<Contact>();
     public DbSet<Resume> Resumes => Set<Resume>();
+    public DbSet<RadarPosting> RadarPostings => Set<RadarPosting>();
+    public DbSet<RadarRun> RadarRuns => Set<RadarRun>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -25,6 +27,15 @@ public class JobDbContext(DbContextOptions<JobDbContext> options) : DbContext(op
             e.PrimitiveCollection(a => a.MatchStrengths);
             e.PrimitiveCollection(a => a.MatchGaps);
             e.PrimitiveCollection(a => a.MatchSuggestions);
+        });
+
+        model.Entity<RadarPosting>(e =>
+        {
+            e.Property(p => p.Status).HasConversion<string>().HasMaxLength(20);
+            // The same posting must never be stored (and scored) twice.
+            e.HasIndex(p => new { p.Board, p.CompanyKey, p.ExternalId }).IsUnique();
+            e.HasIndex(p => p.Status);
+            e.PrimitiveCollection(p => p.Reasons);
         });
     }
 

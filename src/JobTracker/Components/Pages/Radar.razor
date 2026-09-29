@@ -1,0 +1,249 @@
+@page "/radar"
+@using JobTracker.Services.Radar
+@using Microsoft.Extensions.Options
+@implements IDisposable
+@inject IDbContextFactory<JobDbContext> DbFactory
+@inject RadarService Service
+@inject IOptionsMonitor<RadarOptions> Options
+@inject NavigationManager Nav
+
+<PageTitle>Radar · Job Tracker</PageTitle>
+
+<div class="page-head">
+    <div class="grow">
+        <h1>Job Radar</h1>
+        <div class="muted">
+            Watching @Options.CurrentValue.Companies.Count companies' job boards.
+            @if (lastScan is { } ls)
+            {
+                <span>Last scan @Ago(ls.FinishedAt ?? ls.StartedAt): @ls.Fetched postings, @ls.New new, @ls.Passed passed the filter.</span>
+            }
+            else
+            {
+                <span>No scan yet.</span>
+            }
+        </div>
+    </div>
+    <button class="primary" @onclick="ScanNow" disabled="@(Service.Running || scanRequested)">
+        @(Service.Running || scanRequested ? "Scanning…" : "Scan now")
+    </button>
+</div>
+
+@if (lastRun?.Errors is { } errs)
+{
+    <div class="notice" style="margin-bottom:16px">
+        <strong>Last run had problems:</strong>
+        <ul class="clean">@foreach (var e in errs.Split('\n')) { <li>@e</li> }</ul>
+    </div>
+}
+@if (scoring > 0)
+{
+    <div class="notice ok" style="margin-bottom:16px">
+        Claude is scoring @scoring posting(s) as a batch at half price. Results usually arrive within minutes.
+    </div>
+}
+
+<div class="filters">
+    @foreach (var (key, label) in Tabs)
+    {
+        <button class="@(tab == key ? "primary" : "")" @onclick="() => SetTab(key)">@label <span class="pill">@Count(key)</span></button>
+    }
+</div>
+
+@if (Shown.Count == 0)
+{
+    <div class="panel empty">
+        @(tab == "matches" ? "No matches yet. New postings are scanned every few hours." : "Nothing here.")
+    </div>
+}
+else
+{
+    <div class="stack">
+        @foreach (var p in Shown)
+        {
+            <article class="panel radar-card">
+                <div class="row" style="align-items:flex-start">
+                    <div style="flex:1; min-width:0">
+                        <div class="role">
+                            <a href="@p.Url" target="_blank" rel="noopener noreferrer">@p.Title ↗</a>
+                        </div>
+                        <div class="muted small">
+                            @p.Company · @(p.Location ?? "Location not listed")@(p.Remote && p.Location?.Contains("remote", StringComparison.OrdinalIgnoreCase) != true ? " · Remote" : "")
+                            · found @Ago(p.FirstSeenAt)@(p.Closed ? " · no longer listed" : "")
+                        </div>
+                    </div>
+                    @if (p.Score is { } s)
+                    {
+                        <ScorePill Score="s" />
+                    }
+                    @if (p.Level is "mid" or "senior")
+                    {
+                        <span class="pill score-lo" title="Experience level the posting asks for">@p.Level-level</span>
+                    }
+                </div>
+
+                @if (p.Verdict is not null)
+                {
+                    <p style="margin:10px 0 6px">@p.Verdict</p>
+                }
+                @if (p.Reasons.Count > 0)
+                {
+                    <ul class="clean small">@foreach (var r in p.Reasons) { <li>@r</li> }</ul>
+                }
+                @if (tab is "filtered" or "failed" && p.FilterReason is not null)
+                {
+                    <p class="muted small" style="margin:6px 0 0">@p.FilterReason</p>
+                }
+
+                <div class="row" style="margin-top:12px">
+                    @if (p.Status == RadarStatus.Saved && p.JobApplicationId is { } appId)
+                    {
+                        <a class="btn" href="applications/@appId">On your board →</a>
+                    }
+                    else if (p.Status is RadarStatus.Scored or RadarStatus.Dismissed or RadarStatus.Filtered or RadarStatus.Failed)
+                    {
+                        <button class="primary" @onclick="() => Save(p)">Save to board</button>
+                    }
+                    @if (p.Status == RadarStatus.Scored)
+                    {
+                        <button @onclick="() => SetStatus(p, RadarStatus.Dismissed)">Dismiss</button>
+                    }
+                    else if (p.Status == RadarStatus.Dismissed)
+                    {
+                        <button @onclick="() => SetStatus(p, RadarStatus.Scored)">Undo dismiss</button>
+                    }
+                </div>
+            </article>
+        }
+    </div>
+    @if (total > Shown.Count)
+    {
+        <p class="muted small">Showing the first @Shown.Count of @total.</p>
+    }
+}
+
+@code {
+    static readonly (string Key, string Label)[] Tabs =
+    [
+        ("matches", "Matches"),
+        ("all", "All scored"),
+        ("saved", "Saved"),
+        ("dismissed", "Dismissed"),
+        ("filtered", "Filtered out"),
+        ("failed", "Not scored"),
+    ];
+
+    const int MatchScore = 60;
+    const int PageSize = 100;
+
+    string tab = "matches";
+    List<RadarPosting> postings = [];
+    List<RadarPosting> Shown = [];
+    Dictionary<string, int> counts = [];
+    int total, scoring;
+    RadarRun? lastScan, lastRun;
+    bool scanRequested;
+    Timer? refresh;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Load();
+        // Batches finish in the background, so refresh every 20s while the page is open.
+        refresh = new Timer(_ => InvokeAsync(async () => { await Load(); StateHasChanged(); }), null, 20_000, 20_000);
+    }
+
+    async Task Load()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var q = db.RadarPostings.AsNoTracking();
+        counts = new()
+        {
+            ["matches"] = await q.CountAsync(p => p.Status == RadarStatus.Scored && p.Score >= MatchScore && !p.Closed),
+            ["all"] = await q.CountAsync(p => p.Status == RadarStatus.Scored),
+            ["saved"] = await q.CountAsync(p => p.Status == RadarStatus.Saved),
+            ["dismissed"] = await q.CountAsync(p => p.Status == RadarStatus.Dismissed),
+            ["filtered"] = await q.CountAsync(p => p.Status == RadarStatus.Filtered),
+            ["failed"] = await q.CountAsync(p => p.Status == RadarStatus.Failed),
+        };
+        scoring = await q.CountAsync(p => p.Status == RadarStatus.Scoring);
+
+        var filtered = tab switch
+        {
+            "matches" => q.Where(p => p.Status == RadarStatus.Scored && p.Score >= MatchScore && !p.Closed),
+            "all" => q.Where(p => p.Status == RadarStatus.Scored),
+            "saved" => q.Where(p => p.Status == RadarStatus.Saved),
+            "dismissed" => q.Where(p => p.Status == RadarStatus.Dismissed),
+            "filtered" => q.Where(p => p.Status == RadarStatus.Filtered),
+            _ => q.Where(p => p.Status == RadarStatus.Failed),
+        };
+        total = await filtered.CountAsync();
+        // SQLite can't sort by DateTime server-side in every case; fetch then sort.
+        var list = await filtered.Take(1000).ToListAsync();
+        Shown = (tab is "filtered"
+                ? list.OrderByDescending(p => p.FirstSeenAt)
+                : list.OrderByDescending(p => p.Score ?? -1).ThenByDescending(p => p.FirstSeenAt))
+            .Take(PageSize).ToList();
+
+        lastScan = await db.RadarRuns.AsNoTracking().Where(r => r.FetchedBoards && r.FinishedAt != null).OrderByDescending(r => r.Id).FirstOrDefaultAsync();
+        lastRun = await db.RadarRuns.AsNoTracking().OrderByDescending(r => r.Id).FirstOrDefaultAsync();
+        if (scanRequested && lastScan is not null && lastScan.StartedAt > requestedAt) scanRequested = false;
+    }
+
+    int Count(string key) => counts.GetValueOrDefault(key);
+
+    async Task SetTab(string key)
+    {
+        tab = key;
+        await Load();
+    }
+
+    DateTime requestedAt;
+
+    void ScanNow()
+    {
+        requestedAt = DateTime.UtcNow;
+        scanRequested = true;
+        Service.RequestScan();
+    }
+
+    async Task SetStatus(RadarPosting p, RadarStatus status)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.RadarPostings.Where(x => x.Id == p.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status));
+        await Load();
+    }
+
+    async Task Save(RadarPosting p)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var app = new JobApplication
+        {
+            Company = p.Company,
+            Role = p.Title,
+            Location = p.Location,
+            WorkMode = p.Remote ? "Remote" : null,
+            PostingUrl = p.Url,
+            PostingText = p.Text,
+            MatchScore = p.Score,
+            MatchSummary = p.Verdict,
+            Notes = "Found by Job Radar.",
+        };
+        db.Applications.Add(app);
+        await db.SaveChangesAsync();
+        await db.RadarPostings.Where(x => x.Id == p.Id).ExecuteUpdateAsync(s => s
+            .SetProperty(x => x.Status, RadarStatus.Saved)
+            .SetProperty(x => x.JobApplicationId, app.Id));
+        Nav.NavigateTo($"applications/{app.Id}");
+    }
+
+    static string Ago(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc;
+        return span.TotalMinutes < 1 ? "just now"
+            : span.TotalHours < 1 ? $"{(int)span.TotalMinutes}m ago"
+            : span.TotalDays < 1 ? $"{(int)span.TotalHours}h ago"
+            : $"{(int)span.TotalDays}d ago";
+    }
+
+    public void Dispose() => refresh?.Dispose();
+}

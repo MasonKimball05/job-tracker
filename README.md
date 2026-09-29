@@ -51,6 +51,40 @@ stopped partway, and are saved per application.
 
 *Screenshots use fictional companies and a made-up résumé.*
 
+## Job Radar
+
+A background service that watches company job boards so new postings come to
+you. It runs on startup, then every 3 hours:
+
+1. **Fetch** every company in `appsettings.json` → `Radar:Companies` from the
+   public job-board APIs of Greenhouse, Lever and Ashby. These are official,
+   documented feeds, not scraping.
+2. **Free filter:** title and location keywords, plus skipping postings older
+   than 45 days (except new-grad / early-career roles, which stay open for
+   months). In a real scan of 22 companies, 2,382 postings became 49.
+3. **Trim:** strip company boilerplate (about us, benefits, legal) so Claude
+   reads only the role and its requirements.
+4. **Score** with Claude Haiku through the **Message Batches API**, at half
+   price in exchange for asynchronous results. Each posting gets a 0–100 fit
+   score, a one-line verdict, reasons, and the experience level it actually asks for.
+5. **Notify:** matches scoring 75+ push to your phone through ntfy.
+
+The **Radar** page lists matches, with **Save to board** (creates an
+application with the posting attached) and **Dismiss**. Postings are never
+scored twice, and ones taken down are marked "no longer listed".
+
+Adding a company is one line (find the slug in its careers-page URL, e.g.
+`job-boards.greenhouse.io/fleetio` → `fleetio`):
+
+```json
+{ "Name": "Fleetio", "Board": "greenhouse", "Slug": "fleetio" }
+```
+
+Settings, overridable with environment variables (e.g. `Radar__NotifyScore=80`):
+`ScanEveryHours`, `NotifyScore`, `MaxPostingAgeDays`, `CandidateNote`, `PageUrl`,
+and the regex lists `TitleInclude/Exclude`, `LocationInclude/Exclude`,
+`NoAgeLimitTitles`. Notifications need `NTFY_URL` in the environment.
+
 ## How it works
 
 ```mermaid
@@ -130,7 +164,8 @@ src/JobTracker/
   Services/JobAi.cs         Claude calls, error mapping, prompts
   Services/AiModels.cs      result records, JSON schemas, parsing and cleanup
   Services/BoardView.cs     board grouping, filtering, sorting, stats
-  Components/Pages/         Board, NewJob, JobDetail, ResumePage
+  Services/Radar/           Job Radar: board fetchers, filter/trimmer, batch scorer, engine, background service
+  Components/Pages/         Board, NewJob, JobDetail, ResumePage, Radar
   Components/Shared/        JobFields form, JobCard, ScorePill
 tests/JobTracker.Tests/     xUnit: parsing, schema checks, filters, EF round-trips
 ```
@@ -150,7 +185,6 @@ tests/JobTracker.Tests/     xUnit: parsing, schema checks, filters, EF round-tri
 
 - Drag-and-drop between board columns
 - Interview prep: likely questions for a posting, answered from the résumé
-- Import a posting directly from its URL
 - Weekly digest of follow-ups and applications that have gone quiet
 
 ## License
