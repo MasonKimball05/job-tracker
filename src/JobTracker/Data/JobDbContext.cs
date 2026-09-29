@@ -24,6 +24,7 @@ public class JobDbContext(DbContextOptions<JobDbContext> options) : DbContext(op
             e.PrimitiveCollection(a => a.NiceToHaves);
             e.PrimitiveCollection(a => a.MatchStrengths);
             e.PrimitiveCollection(a => a.MatchGaps);
+            e.PrimitiveCollection(a => a.MatchSuggestions);
         });
     }
 

@@ -54,6 +54,7 @@ public class JobApplication
     public string? MatchSummary { get; set; }
     public List<string> MatchStrengths { get; set; } = [];
     public List<string> MatchGaps { get; set; } = [];
+    public List<string> MatchSuggestions { get; set; } = [];
 
     public string? CoverLetter { get; set; }
 

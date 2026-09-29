@@ -131,9 +131,9 @@ else
                     {
                         <div><strong class="small">Gaps</strong><ul class="clean">@foreach (var x in job.MatchGaps) { <li>@x</li> }</ul></div>
                     }
-                    @if (suggestions.Count > 0)
+                    @if (job.MatchSuggestions.Count > 0)
                     {
-                        <div><strong class="small">Suggestions</strong><ul class="clean">@foreach (var x in suggestions) { <li>@x</li> }</ul></div>
+                        <div><strong class="small">Suggestions</strong><ul class="clean">@foreach (var x in job.MatchSuggestions) { <li>@x</li> }</ul></div>
                     }
                 }
                 else if (!analyzing)
@@ -186,7 +186,6 @@ else
     bool analyzing, drafting, copied;
     bool busy => analyzing || drafting;
     string? matchError, letterError, guidance;
-    List<string> suggestions = [];
     CancellationTokenSource? draftCts;
 
     protected override async Task OnParametersSetAsync()
@@ -252,7 +251,7 @@ else
             job.MatchSummary = m.Verdict;
             job.MatchStrengths = m.Strengths;
             job.MatchGaps = m.Gaps;
-            suggestions = m.Suggestions;
+            job.MatchSuggestions = m.Suggestions;
             await Save();
         }
         catch (AiException e)
