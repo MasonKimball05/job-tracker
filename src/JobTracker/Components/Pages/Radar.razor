@@ -178,7 +178,7 @@ else
         };
         total = await filtered.CountAsync();
         // SQLite can't sort by DateTime server-side in every case; fetch then sort.
-        var list = await filtered.Take(1000).ToListAsync();
+        var list = await filtered.OrderByDescending(p => p.Id).Take(1000).ToListAsync();
         Shown = (tab is "filtered"
                 ? list.OrderByDescending(p => p.FirstSeenAt)
                 : list.OrderByDescending(p => p.Score ?? -1).ThenByDescending(p => p.FirstSeenAt))
