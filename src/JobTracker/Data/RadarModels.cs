@@ -20,6 +20,9 @@ public enum RadarStatus
 /// <summary>A job posting found on a company's job board.</summary>
 public class RadarPosting
 {
+    /// <summary>Scores at or above this count as a match: the Radar page's Matches tab and Hop's feed.</summary>
+    public const int MatchScore = 60;
+
     public int Id { get; set; }
 
     // Where it came from. (Board, CompanyKey, ExternalId) is unique.

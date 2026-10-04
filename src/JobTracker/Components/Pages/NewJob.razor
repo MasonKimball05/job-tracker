@@ -56,12 +56,23 @@
 @code {
     const int MaxPosting = 50_000;
 
+    /// <summary>/new?url=... fills in the posting link (Hop opens this with a link from the clipboard).</summary>
+    [SupplyParameterFromQuery(Name = "url")]
+    public string? PrefillUrl { get; set; }
+
     JobApplication job = new();
     string postingText = "";
     string? summary;
     string? error;
     bool extracting;
     bool saving;
+
+    protected override void OnInitialized()
+    {
+        // Only a plain web link, and no longer than the field allows.
+        if (Uri.TryCreate(PrefillUrl, UriKind.Absolute, out var uri) && uri.Scheme is "https" or "http" && PrefillUrl!.Length <= 2000)
+            job.PostingUrl = uri.ToString();
+    }
 
     async Task Extract()
     {

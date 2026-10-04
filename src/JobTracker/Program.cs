@@ -56,6 +56,24 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseAntiforgery();
 
+// Read-only JSON for Hop, my launcher. See Services/HopFeed.cs.
+var hop = app.MapGroup("/api/hop");
+hop.MapGet("/followups", async (IDbContextFactory<JobDbContext> f, TimeProvider clock) =>
+{
+    await using var db = await f.CreateDbContextAsync();
+    return await HopFeed.FollowUpsAsync(db, DateOnly.FromDateTime(clock.GetLocalNow().DateTime));
+});
+hop.MapGet("/matches", async (IDbContextFactory<JobDbContext> f) =>
+{
+    await using var db = await f.CreateDbContextAsync();
+    return await HopFeed.MatchesAsync(db);
+});
+hop.MapGet("/applications", async (IDbContextFactory<JobDbContext> f, string? q) =>
+{
+    await using var db = await f.CreateDbContextAsync();
+    return await HopFeed.SearchAsync(db, q is { Length: > 200 } ? q[..200] : q);
+});
+
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
