@@ -56,6 +56,15 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseAntiforgery();
 
+// Follow-up dates as a calendar feed, for Apple Calendar to subscribe to.
+app.MapGet("/calendar.ics", async (IDbContextFactory<JobDbContext> f, HttpRequest request, TimeProvider clock) =>
+{
+    await using var db = await f.CreateDbContextAsync();
+    var apps = await db.Applications.AsNoTracking().Where(a => a.FollowUpOn != null).ToListAsync();
+    var ics = CalendarFeed.Build(apps, $"{request.Scheme}://{request.Host}", clock.GetUtcNow().UtcDateTime);
+    return Results.Text(ics, "text/calendar; charset=utf-8");
+});
+
 // Read-only JSON for Hop, my launcher. See Services/HopFeed.cs.
 var hop = app.MapGroup("/api/hop");
 hop.MapGet("/followups", async (IDbContextFactory<JobDbContext> f, TimeProvider clock) =>
